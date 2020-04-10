@@ -1,0 +1,51 @@
+---
+Kuan-lin Huang @ 2020
+---
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+source("stat_function.R")
+
+COVID_19 = read.table(sep="|",header=T,"../MSSM_COVID_20200406/COVID_19_De-identified-20200406.txt", quote="")
+
+dim(COVID_19)
+```
+
+```{r}
+summary(COVID_19)
+```
+
+Only the cases that have test results.
+```{r}
+COVID_19wResults = COVID_19[COVID_19$COVID_RESULT %in% c("DETECTED","NOT DETECTED"),]
+dim(COVID_19wResults)
+summary(COVID_19wResults)
+```
+
+A quick logistic regression test, COVID_RESULT ~ each variable
+```{r}
+tt=NULL
+for (variable in colnames(COVID_19wResults)[-c(1,2)]){
+  results = run_glm(data = COVID_19wResults, xi = variable, yi="COVID_RESULT", ytype = "Binary")
+  tt = rbind(tt, results)
+}
+
+tt$FDR = p.adjust(tt[,"Pr(>Chi)"], method="fdr") 
+tt=tt[order(tt$FDR, decreasing=FALSE),]
+
+
+write.table(tt, quote=F, sep="\t", file = "out/COVID19_results_logisticRegSingleVar.tsv", row.names = F)
+```
+
+Quick peak into the results
+```{r}
+head(tt[1:10,])
+
+p = ggplot(data=tt, aes(y=-log10(FDR), x=coeff, color = coeff>0))
+p = p + geom_point(alpha=0.4) + theme_bw()
+p = p + geom_text_repel(aes(label=ifelse(-log(FDR)>100,NA,as.character(xi))),size=2)
+p = p + scale_y_log10()
+p
+ggsave(file = "out/COVID19_results_logisticRegSingleVar_volcano.pdf",useDingbat=F)
+```
