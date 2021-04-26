@@ -1,0 +1,518 @@
+---
+title: "commsmed_rebuttal"
+author: "Tomi Jun"
+date: "1/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+source("../../../../../../../OneDrive/PROJECTS/CODING/R/tomi_functions.R")
+
+desc_comp_2df <- function(df1 = NULL, df2 = NULL, var_names = NULL, cat_vars = NULL, cont_vars = NULL){
+  # Function that describes and compares 2 dataframes
+  # Returns a table with summary values for the variables of interest, and p-values for comparisons 
+  # df1, df2: dataframes for comparison. Must both have the variables of interest
+  # var_names: vector of characters with the names of the variables of interest
+  # cat_vars, cont_vars: vectors of characters with the names of categorical or continuouus variables. These variables must be in the vector var_names and the length of these two vectors together must equal the length of var_names
+
+    desc1 <- describe_vars(data = df1,
+                         var_names = var_names,
+                         cat_vars = cat_vars,
+                         cont_vars = cont_vars) 
+  
+  desc2 <- describe_vars(data = df2,
+                         var_names = var_names,
+                         cat_vars = cat_vars,
+                         cont_vars = cont_vars) 
+  
+  comp <- compare_desc_vars(df1 = df1, 
+                            df2 = df2,
+                            var_names = var_names,
+                            cat_vars = cat_vars,
+                            cont_vars = cont_vars)
+  
+  df <- left_join(desc1, desc2, by=c("variable", "level"), suffix = c(".1", ".2")) %>% 
+  left_join(., comp, by=c("variable", "level"))
+  
+  return(df)
+}
+
+```
+
+Load dataset (if necessary)
+```{r load dataset}
+fn <- "out/cohorts/0805_ADMITTED_COVID_ADULTS.txt"
+adm.08 <- read.table(fn, header=T, sep="\t", quote="", stringsAsFactors = F)
+
+## Make factors:
+adm.08$RACE_SIMPLE <- factor(adm.08$RACE_SIMPLE, levels = c("NH White", "NH Black", "Hispanic", "Asian", "Other"))
+adm.08$ENC_TIME_PERIOD <- factor(adm.08$ENC_TIME_PERIOD, levels = c("April13", "June2", "August5"))
+adm.08$AGE_CAT <- factor(adm.08$AGE_CAT, levels = c("55-64", "<55", "65-74", ">=75"))
+adm.08$FACILITY <- factor(adm.08$FACILITY, levels = unique(adm.08$FACILITY))
+adm.08$SMOKING_SIMPLE <- factor(adm.08$SMOKING_SIMPLE, levels = c("NEVER", "FORMER", "CURRENT"))
+adm.08$O2_CAT <- factor(adm.08$O2_CAT, levels = c(">=98", "95-98", "92-95", "<92"))
+adm.08$BMI_CAT <- factor(adm.08$BMI_CAT, levels = c("18.5-25", "<18.5", "25-30",
+                                                    "30-35", "35-40", ">=40"))
+
+```
+## Reviewer 1
+
+## Reviewer 2
+> 3. Some of the medication is mentioned. I, however, assume that patients had been on other drugs, may be in clinical trials. If yes, has this be done gender balanced?
+
+To answer this, we will make a supp table showing patients getting each treatment by sex. The drugs we have info for are: Tocilizumab, Remdesivir, Sarilumab, Hydroxychloroquine, Anakinra, Azithromycin, Convalescent plasma, Steroid, Dexamethasone
+
+```{r summarise different medication use by sex}
+tx_vars <- c("TOCILIZUMAB", "REMDESIVIR", "SARILUMAB", "HYDROXYCHLOROQUINE", "ANAKINRA", "AZITHROMYCIN", "CONVALESCENT_PLASMA", "STEROID", "DEXAMETHASONE")
+suppTX_tx <- desc_comp_2df(
+  df1 = adm.08 %>% filter(SEX=="MALE"),
+  df2 = adm.08 %>% filter(SEX=="FEMALE"),
+  var_names = tx_vars,
+  cat_vars = tx_vars
+) %>% 
+  filter(level=="1") %>% 
+  select(Treatment = variable, Male = output_value.1, Female = output_value.2, P = pvalue) %>% 
+  mutate(Total = as.numeric(str_extract(Male, "\\d*")) + as.numeric(str_extract(Female, "\\d*")),
+         P = format.pval(as.numeric(P), digits = 1, eps=0.001))
+
+fn <- "out/commsmed_revisions/suppTX_treatments.csv"
+write.csv(suppTX_tx, fn, row.names = F)
+
+suppTX_tx
+```
+
+Let's also present this stratified by ICU level 
+```{r treatment stratified by ICU level}
+tx_icu <- desc_comp_2df(
+  df1= adm.08 %>% filter(SEX=="MALE" & ICU_LVL==1),
+  df2= adm.08 %>% filter(SEX=="FEMALE" & ICU_LVL==1),
+  var_names=tx_vars,
+  cat_vars=tx_vars
+) %>% 
+  filter(level==1) %>% 
+  select(Treatment = variable, Male = output_value.1, Female = output_value.2, P = pvalue) %>% 
+  mutate(Total = as.numeric(str_extract(Male, "\\d*")) + as.numeric(str_extract(Female, "\\d*")),
+         P = format.pval(as.numeric(P), digits = 1, eps=0.001))
+
+tx_non_icu <- desc_comp_2df(
+  df1= adm.08 %>% filter(SEX=="MALE" & ICU_LVL==0),
+  df2= adm.08 %>% filter(SEX=="FEMALE" & ICU_LVL==0),
+  var_names=tx_vars,
+  cat_vars=tx_vars
+) %>% 
+  filter(level==1) %>% 
+  select(Treatment = variable, Male = output_value.1, Female = output_value.2, P = pvalue) %>% 
+  mutate(Total = as.numeric(str_extract(Male, "\\d*")) + as.numeric(str_extract(Female, "\\d*")),
+         P = format.pval(as.numeric(P), digits = 1, eps=0.001))
+
+suppTX_tx_icu <- bind_rows(list(Overall= suppTX_tx, ICU=tx_icu, `NON-ICU`=tx_non_icu), .id="Cohort")
+
+fn <- "out/commsmed_revisions/suppTX_treatments_by_icu.csv"
+write.csv(suppTX_tx_icu, fn, row.names = F)
+
+suppTX_tx_icu
+```
+
+How common were each of these treatments overall?
+```{r how common were each of these treatments overall?}
+describe_vars(data=adm.08, var_names = tx_vars, cat_vars = tx_vars) %>% 
+  filter(level==1) %>% 
+  arrange(desc(summary_value))
+
+```
+
+
+## Reviewer 3
+
+>1. The authors note that men were more likely to receive steroids than women
+>a. There was no difference in use of dexamethasone, which steroids then account for the difference?
+
+To answer this, we will make a table showing how many patients got each of the steroids and break it down by sex. Some of the variables needed for this come from the 1_prepare_0805_cohort.R file.
+
+```{r identify encounters with steroids}
+steroid_enc_list <- as.list(NULL)
+for(s in c(steroid_meds, "ANY")){
+  if(s=="ANY"){ster <- steroid_meds} else{ster <- s}
+  steroid_enc_list[[s]] <- covid_meds %>% 
+  filter(MEDICATION_NAME %in% ster) %>% 
+  filter(RECORD_TYPE == "Medication_Administration") %>% 
+  pull(NEW_MASKED_ENCOUNTER_EPIC_CSN) %>% 
+  unique() %>% 
+  as.character()
+}
+
+steroid_df <- adm.08 %>% 
+  select(NEW_MASKED_ENCOUNTER_EPIC_CSN, NEW_MASKED_MRN, SEX) %>% 
+  mutate(DEXAMETHASONE = case_when(NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["DEXAMETHASONE"]] ~ 1,
+                                   !NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["DEXAMETHASONE"]] ~ 0
+                                   ),
+         PREDNISONE = case_when(NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["PREDNISONE"]] ~ 1,
+                                   !NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["PREDNISONE"]] ~ 0
+                                   ),
+         METHYLPREDNISOLONE = case_when(NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["METHYLPREDNISOLONE"]] ~ 1,
+                                   !NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["METHYLPREDNISOLONE"]] ~ 0
+                                   ),
+         HYDROCORTISONE = case_when(NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["HYDROCORTISONE"]] ~ 1,
+                                   !NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["HYDROCORTISONE"]] ~ 0
+                                   ),
+
+         ANY = case_when(NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["ANY"]] ~ 1,
+                         !NEW_MASKED_ENCOUNTER_EPIC_CSN %in% steroid_enc_list[["ANY"]] ~ 0
+                         )
+         )
+```
+
+
+```{r get number of men and women in cohort}
+num_tot <- steroid_df %>% nrow()
+num_m <- steroid_df %>% filter(SEX=="MALE") %>% nrow()
+num_f <- steroid_df %>% filter(SEX=="FEMALE") %>% nrow()
+
+```
+
+
+```{r # of patients getting each steroid}
+steroid_df %>% pivot_longer(c(DEXAMETHASONE, HYDROCORTISONE, METHYLPREDNISOLONE, PREDNISONE, ANY), 
+                            names_to = "STEROID") %>% 
+  group_by(STEROID) %>% 
+  filter(value==1) %>% 
+  summarise(num_pts = n_distinct(NEW_MASKED_MRN)) %>% 
+  mutate(pct_total = round(num_pts/num_tot, 2))
+```
+
+```{r # of patients getting each steroid, by sex}
+steroid_df %>% pivot_longer(c(DEXAMETHASONE, HYDROCORTISONE, METHYLPREDNISOLONE, PREDNISONE, ANY), 
+                            names_to = "STEROID") %>% 
+  group_by(STEROID, SEX) %>% 
+  filter(value==1) %>% 
+  summarise(num_pts = n_distinct(NEW_MASKED_MRN)) %>% 
+  mutate(pct = round(case_when(SEX=="FEMALE" ~ num_pts/num_f,
+                               SEX=="MALE" ~ num_pts/num_m),2)
+         )
+```
+
+```{r Supp Table: # of patients getting each steroid, by sex}
+
+steroid_m <- describe_vars(data = steroid_df %>% filter(SEX=="MALE"),
+                           var_names= c("ANY", steroid_meds),
+                           cat_vars = c("ANY", steroid_meds)
+                           ) %>% 
+  filter(level==1) %>% 
+  select(variable, MALE=output_value)
+
+steroid_f <- describe_vars(data = steroid_df %>% filter(SEX=="FEMALE"),
+                           var_names= c("ANY", steroid_meds),
+                           cat_vars = c("ANY", steroid_meds)
+                           ) %>% 
+  filter(level==1) %>% 
+  select(variable, FEMALE=output_value)
+
+steroid_comp_mf <- compare_desc_vars(df1= steroid_df %>% filter(SEX=="MALE"),
+                                     df2= steroid_df %>% filter(SEX=="FEMALE"),
+                                     var_names= c("ANY", steroid_meds),
+                                     cat_vars= c("ANY", steroid_meds)) %>% 
+  select(variable, pvalue)
+
+suppTX_steroids <- left_join(steroid_m, steroid_f, by="variable") %>% 
+  left_join(., steroid_comp_mf, by="variable") %>% 
+  mutate(
+    P = format.pval(as.numeric(pvalue), digits=1, eps=0.001),
+    Total = as.numeric(str_extract(MALE, "\\d*")) + as.numeric(str_extract(FEMALE, "\\d*"))) %>% 
+  select(Steroid = variable, Male = MALE, Female = FEMALE, P, Total)
+
+fn <- "out/commsmed_revisions/suppTX_steroids.csv"
+write.csv(suppTX_steroids, fn, row.names = F)
+
+suppTX_steroids
+```
+
+
+>b. Was there any difference in steroid utilization between men vs women when stratified by severity of illness?
+
+To answer this, we could look at steroid use among ICU and non-ICU patients.
+
+```{r steroids among ICU}
+icu_pts <- adm.08 %>% filter(ICU_LVL==1) %>% pull(NEW_MASKED_MRN)
+
+steroid_icu <- steroid_df %>% 
+  filter(NEW_MASKED_MRN %in% icu_pts)
+
+suppTX_steroids_icu <- desc_comp_2df(df1 = steroid_icu %>% filter(SEX=="MALE"),
+                                     df2 = steroid_icu %>% filter(SEX=="FEMALE"),
+                                     var_names = c("ANY", steroid_meds),
+                                     cat_vars = c("ANY", steroid_meds)) %>% 
+  filter(level==1) %>% 
+  select(STEROID=variable, MALE = output_value.1, FEMALE = output_value.2, pvalue)
+
+fn <- "out/commsmed_revisions/suppTX_steroids_icu.csv"
+write.csv(suppTX_steroids_icu, fn, row.names=F)
+
+suppTX_steroids_icu
+```
+```{r steroids among non-ICU}
+non_icu_pts <- adm.08 %>% filter(ICU_LVL==0) %>% pull(NEW_MASKED_MRN)
+
+steroid_non_icu <- steroid_df %>% 
+  filter(NEW_MASKED_MRN %in% non_icu_pts)
+
+suppTX_steroids_non_icu <- desc_comp_2df(df1 = steroid_non_icu %>% filter(SEX=="MALE"),
+                                     df2 = steroid_non_icu %>% filter(SEX=="FEMALE"),
+                                     var_names = c("ANY", steroid_meds),
+                                     cat_vars = c("ANY", steroid_meds)) %>% 
+  filter(level==1) %>% 
+  select(STEROID=variable, MALE = output_value.1, FEMALE = output_value.2, pvalue)
+
+fn <- "out/commsmed_revisions/suppTX_steroids_non_icu.csv"
+write.csv(suppTX_steroids_non_icu, fn, row.names=F)
+
+suppTX_steroids_non_icu
+
+
+```
+
+It may also be worth using O2<92% as another means of stratifying by disease severity 
+
+```{r steroids among O2<92%}
+lo2_pts <- adm.08 %>% filter(O2_LOW==1) %>% pull(NEW_MASKED_MRN)
+
+steroid_lo2 <- steroid_df %>% 
+  filter(NEW_MASKED_MRN %in% lo2_pts)
+
+suppTX_steroids_lo2 <- desc_comp_2df(df1= steroid_lo2 %>% filter(SEX=="MALE"),
+                                     df2= steroid_lo2 %>% filter(SEX=="FEMALE"),
+                                     var_names=c("ANY", steroid_meds),
+                                     cat_vars=c("ANY", steroid_meds)) %>% 
+  filter(level==1) %>% 
+  select(STEROID=variable, MALE = output_value.1, FEMALE = output_value.2, pvalue)
+
+fn <- "out/commsmed_revisions/suppTX_steroids_lo2.csv"
+write.csv(suppTX_steroids_lo2, fn, row.names=F)
+
+suppTX_steroids_lo2
+```
+
+```{r steroids in o2>92%}
+ho2_pts <- adm.08 %>% filter(O2_LOW==0) %>% pull(NEW_MASKED_MRN)
+
+steroid_ho2 <- steroid_df %>% 
+  filter(NEW_MASKED_MRN %in% ho2_pts)
+
+suppTX_steroids_ho2 <- desc_comp_2df(df1= steroid_ho2 %>% filter(SEX=="MALE"),
+                                     df2= steroid_ho2 %>% filter(SEX=="FEMALE"),
+                                     var_names=c("ANY", steroid_meds),
+                                     cat_vars=c("ANY", steroid_meds)) %>% 
+  filter(level==1) %>% 
+  select(STEROID=variable, MALE = output_value.1, FEMALE = output_value.2, pvalue)
+
+fn <- "out/commsmed_revisions/suppTX_steroids_ho2.csv"
+write.csv(suppTX_steroids_ho2, fn, row.names=F)
+
+suppTX_steroids_ho2
+```
+
+> 3. Do the authors have data on time from symptom onset until admission? Is it possible that worse outcomes in men are due to later presentation (and hence more hypoxia / severe illness on arrival)?
+
+How can we look at the question of whether men are more likely to delay seeking care? There really isn't a good way aside from time from symptom onset.
+I thought outpatient test positivity could be one way to look at it -- i.e. if men have higher test positivity, that might suggest that they only go get tested when they are really sick. But it's just as possible that men are more susceptible to infection and go seek care at an equal rate as women.
+
+I also thought looking (in a purely descriptive way) at the % of men and women with outpatient COVID visits compared to inpatient admissions might be informative. But, the numbers aren't that clear, and the cohort is too messsy to take a deeper dive. A majority (54%) of outpatient visits were with women, while about 51% of inpatient non-icu covid encoutners were with women. This could mean that women are seeking outpatient care for COVID more, whereas admissiosn are more evenly balanced. But the dataset is for "covid-related" encounters and some patients have multiple encoutners...it is messy and I think beyond the scope to look at healthcare behaviors. 
+
+I did some analysis below, but I don't think I'll end up using any of it
+
+```{r Number of unique patients in all encounters}
+n_all_enc_pts <- n_distinct(all_enc$NEW_MASKED_MRN)
+n_all_enc_encs <- n_distinct(all_enc$NEW_MASKED_ENCOUNTER_EPIC_CSN)
+
+print(paste0("There were ", n_all_enc_encs, " COVID-related encounters up till August 5, 2020. There were ", n_all_enc_pts, " distinct patients involved in these encounters."))
+```
+
+```{r Tabulate COVID-related encounter patients by sex}
+
+all_enc %>% group_by(SEX) %>% summarise(n = n_distinct(NEW_MASKED_MRN))
+
+```
+
+```{r Tabulate COVID encounters by sex and acuity}
+
+df <- all_enc %>% 
+  select(NEW_MASKED_MRN, SEX, ENC_ACUITY) %>% 
+  distinct()
+
+# mm <- model.matrix(~ENC_ACUITY -1, data=df)
+# 
+# dfmm <- bind_cols(df, as.data.frame(mm)) %>% 
+#   filter(!is.na(SEX))
+
+# for(e in unique(df$ENC_ACUITY)){
+#   col <- paste0("ENC_ACUITY",e)
+#   x <- chisq.test(dfmm$SEX, dfmm[,col])
+#   print(e)
+#   print(round(prop.table(x$observed, margin=2),2))
+#   print(x$p.value)
+#   cat("\n")
+# }
+
+print(table(df$SEX, df$ENC_ACUITY))
+print(round(prop.table(table(df$SEX, df$ENC_ACUITY), margin=2),2))
+
+```
+
+This may be a bit misleading though. ENC_ACUITY was designed to assign the highest acuity level to a patient's encounter...
+Also, we don't have full knowledge about outpatients -- they may have been admitted elsewhere.
+
+It may be more informative to focus on COVID-related ED encounters. Can see how many men and women presented ot the ED for COVD, and then see how many were admitted versus discharged. 
+
+```{r Examine patients presenting to the ED with COVID}
+## This follows a similar selection algorithm as adm.08
+ed <- all_enc %>% 
+  filter(AGE >=18) %>% 
+  filter(EMERGENCY_DEPARTMENT==1) %>% 
+  filter(COVID_POS) %>%
+  filter(!is.na(SEX)) %>% 
+  filter(abs(COVID_ORDER_DAYS_SINCE_ENCOUNTER)<=2) %>% 
+  select(NEW_MASKED_MRN, SEX, ENC_SEQ_NUMBER, ENC_ACUITY) %>% 
+  distinct() %>% 
+  group_by(NEW_MASKED_MRN) %>% 
+  arrange(desc(ENC_SEQ_NUMBER), .by_group=T) %>% 
+  slice(1) %>% 
+  mutate(ADM = case_when(ENC_ACUITY=="ED" ~ 0,
+                         ENC_ACUITY %in% c("ICU", "INPT") ~ 1))
+
+x <- chisq.test(ed$SEX, ed$ADM)
+
+print(table(ed$SEX))
+print(round(prop.table(table(ed$SEX)),2))
+
+print(x$observed)
+print(round(prop.table(x$observed, margin=2),2))
+print(x$p.value)
+
+print(table(ed$SEX, ed$ENC_ACUITY))
+print(round(prop.table(table(ed$SEX, ed$ENC_ACUITY), margin=2),2))
+
+
+```
+ 
+### Regression including O2 as a continuous varibale 
+```{r Multivar for Death/ICU/Intub}
+covars <- c("AGE_CAT", "SEX", "RACE_SIMPLE", "MANHATTAN", "ENC_TIME_PERIOD",
+            "OBESITY_CLEAN", "HTN", "DIABETES", "CORONARY_ARTERY_DISEASE",
+            "HEART_FAILURE", "ATRIAL_FIBRILLATION", "CHRONIC_KIDNEY_DISEASE", 
+            "COPD_ASTHMA", "CANCER_FLAG", "CHRONIC_LIVER_DISEASE", "O2_SAT")
+
+outcomes <- c("INHOSP_DEATH", "INTUBATED", "ICU_LVL")
+
+for(o in outcomes){
+  model <- formula(paste0(o, "~", paste0(covars, collapse = "+")))
+  
+  mv <- glm(model, data = adm.08, family = "binomial")
+  # vif(mv)
+  output_logistic_reg_table(model=mv, fn=paste0("out/commsmed_revisions/o2_sat/LogisticMultiVarO2sat_", o, "_ALL.txt"), sigfigs=3)
+  
+  model <- formula(paste0(o, "~", paste0(covars[covars!="SEX"], collapse = "+")))
+  mv.m <- glm(model, data = adm.08 %>% filter(SEX=="MALE"), family = "binomial")
+  # vif(mv.m)
+  output_logistic_reg_table(model=mv.m, fn=paste0("out/commsmed_revisions/o2_sat/LogisticMultiVarO2sat_", o, "_MALE.txt"), sigfigs=3)
+  
+  mv.f <- glm(model, data = adm.08 %>% filter(SEX=="FEMALE"), family = "binomial")
+  # vif(mv.f)
+  output_logistic_reg_table(model=mv.f, fn=paste0("out/commsmed_revisions/o2_sat/LogisticMultiVarO2sat_", o, "_FEMALE.txt"), sigfigs=3)
+  
+}
+
+```
+
+```{r input and format logistic regression results}
+fn <- "out/commsmed_revisions/o2_sat/multireg_temp_o2.csv"
+multireg_temp_o2 <- read.csv(fn)
+
+cohort <- c("ALL", "MALE", "FEMALE")
+outcomes <- c("INHOSP_DEATH", "INTUBATED", "ICU_LVL")
+multi_list <- as.list(NULL)
+
+for (o in outcomes) {
+  for(c in cohort){
+    fn <- paste0("out/commsmed_revisions/o2_sat/LogisticMultiVarO2sat_", o, "_", c, ".txt" )
+    list_name <- paste0(o, ".", c)
+    multi_list[[list_name]] <- read.table(fn, header=T, sep="\t", quote="", stringsAsFactors = F) %>% 
+      full_join(
+        .,
+        multireg_temp_o2 %>% select(var=level, var_label, order),
+        by=c("var")
+      ) %>% 
+      arrange(order) %>% 
+      mutate(OR = case_when(is.na(OR) ~ 1,
+                            !is.na(OR) ~ OR),
+             or.ci.lo = case_when(is.na(or.ci.lo) ~ 1,
+                                  !is.na(or.ci.lo) ~ or.ci.lo),
+             or.ci.hi = case_when(is.na(or.ci.hi) ~ 1,
+                                  !is.na(or.ci.hi) ~ or.ci.hi),
+             clean_out1 = case_when(is.na(clean_out1) ~ "Ref",
+                                    !is.na(clean_out1) ~ clean_out1)) %>% 
+      filter(var != "(Intercept)")
+    
+    if(c != "ALL"){
+      multi_list[[list_name]] <- multi_list[[list_name]] %>% filter(var!="SEXMALE")
+    }
+    
+  }
+}
+
+```
+```{r Output merged table of DEATH/ICU/INTUB results for ALL}
+
+suppTX_o2_all <- multi_list$INHOSP_DEATH.ALL %>% 
+  select(var_label)
+for(l in c("INHOSP_DEATH.ALL", "INTUBATED.ALL", "ICU_LVL.ALL")){
+  df <- multi_list[[l]] %>% 
+    select(var_label, clean_out1, p) %>% 
+    mutate(p=format.pval(p, digits=1, na.form="-", eps=0.001))
+  colnames(df) <- c("var_label", l, paste0("p.", l))
+  suppTX_o2_all <- suppTX_o2_all %>% 
+    full_join(., df, by="var_label")
+}
+
+fn <- "out/commsmed_revisions/o2_sat/SuppTX_LogisticMultiVarO2sat_Merged.txt"
+write.table(suppTX_o2_all, fn, quote=F, sep="\t", row.names=F)
+
+```
+```{r Output merged table of DEATH/ICU/INTUB results for sex-stratified Male/Female}
+suppTX_o2_sex <- multi_list$INHOSP_DEATH.MALE %>% 
+  select(var_label)
+list_names <- c("INHOSP_DEATH.MALE", "INHOSP_DEATH.FEMALE",
+                "INTUBATED.MALE", "INTUBATED.FEMALE",
+                "ICU_LVL.MALE", "ICU_LVL.FEMALE")
+for(l in list_names){
+  df <- multi_list[[l]] %>% 
+    select(var_label, clean_out1) 
+  colnames(df) <- c("var_label", l)
+  suppTX_o2_sex <- suppTX_o2_sex %>% 
+    full_join(., df, by="var_label")
+}
+
+fn <- "out/commsmed_revisions/o2_sat/SuppTX_LogisticMultiVarO2sat_SexStrat_Merged.txt"
+write.table(suppTX_o2_sex, fn, quote=F, sep="\t", row.names=F)
+
+```
+
+
+## Misc
+Did the use of hydroxychlorquine and azithromycin decline over the various time periods?
+```{r did the use of hydroxychloroquine decline?}
+x <- as.matrix(table(adm.08$ENC_TIME_PERIOD, adm.08$HYDROXYCHLOROQUINE))
+print(x)
+print(prop.table(x, margin=1))
+chisq.test(x)
+```
+Check Azithro
+```{r Did the use of azithro decline?}
+x <- as.matrix(table(adm.08$ENC_TIME_PERIOD, adm.08$AZITHROMYCIN))
+print(x)
+print(prop.table(x, margin=1))
+chisq.test(x)
+
+```
+
+
