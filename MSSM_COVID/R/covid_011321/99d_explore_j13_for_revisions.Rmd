@@ -1,0 +1,278 @@
+---
+title: "99d_explore_j13_for_revisions"
+author: "Tomi Jun"
+date: "2/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(MatchIt)
+source("../../../../../../../OneDrive/PROJECTS/CODING/R/tomi_functions.R")
+
+```
+
+## Introduction
+This RMD is for exploring the adm.j13 cohort, consisting of MSHS patients admitted with COVID-19 between August 5, 2020 and Jan 13, 2021. This cohort was assembled as a validation cohort for the CommsMed revisions of the COVID-sex paper. The findings from adm.j13 require some further exploration and explanation.
+
+### Cohorts
+0805: MSHS patients admitted with COVID from the start of the pandemic until Aug 5, 2020
+j13: MSHS patients admitted with COVID from Aug 5, 2020 till Jan 13, 2021
+
+adm.j13: Dataframe with only j13 patients 
+adm.113: Dataframe with 0805 + j13 patients 
+
+```{r load dataframes if needed}
+# fn <- "out/cohorts/0113_ADMITTED_COVID_ADULTS.txt"
+# adm.113 <- read.table(fn, header=T, sep="\t", quote="", stringsAsFactors = F)
+# 
+# fn <- "out/cohorts/ADMITTED_COVID_ADULTS_FROM_0805_TO_0113_FOR_COMMSMED_REVISIONS.txt"
+# adm.j13 <- read.table(fn, header=T, sep="\t", quote="", stringsAsFactors = F)
+
+```
+
+
+### Findings so far
+The j13 and 0805 cohorts are similar in some ways but differ in many others. 
+- Similarities: Age, Sex
+- Differences: j13 is more white; j13 was treated more in Manhattan; j13 had fewer comorbidities (HTN, DM, Obesity, CKD, CVD); j13 had better initial vitals (fewer febrile, tachy, hotn, hypoxic); j13 had more covid treatments (Remdesivir, steroids, dexamethasone); j13 had better outcomes (death, ICU, intubated)
+
+```{r Load the cohort comparison table, if desired}
+fn <- "out/descriptive/T1_AllVars_by_0805_0113_Cohorts.txt"
+read.table(fn, header=T, sep="\t", quote="", stringsAsFactors = F)
+```
+
+Overall, the risk factors associated with death were similar in both cohorts.
+- Independent risk factors in j13 were: Older age, Hypoxia, Male, CKD
+- Independent risk factors in 0805 were: Older age, Hypoxia, Male, CKD, Obesity
+```{r Load the multivar regression for j13, if desired}
+fn <- "out/regression/LogisticMultiVar_INHOSP_DEATH_ALL.txt"
+read.table(fn, header=T, sep="\t", quote="", stringsAsFactors = F)
+
+```
+
+However, the sex-interactions are not the same between 0805 and j13
+- In 0805, there were significant interactions between sex-hypoxia and sex-obesity. These risk factors were associated with greater effect sizes in women than men. 
+- In j13, sex-hypoxia is not significant, and sex-obesity is the opposite: obesity has a greater effect size for men than women. 
+
+What could explain this?
+- The cohorts are clearly quite different, and treatments and outcomes have definitely improved. 
+- Perhaps: Some treatments affect men and women differently. (You'd have to argue something like that to explain the reversal of the sex-obesity interaction)
+- Perhaps: The relative effect of treatments are the same for men and women, but men have a greater absolute benefit due to their baseline risk, such that the outcomes for men and women are now closer together. (This could be the case for the sex-hypoxia interaction)
+- Perhaps: There are some interactions between race, sex, and obesity? 
+
+## Death rates, stratified by sex, obesity, and time period
+```{r}
+df_list <- list(all = adm.113, 
+                all.m = adm.113 %>% filter(SEX=="MALE"), 
+                all.f = adm.113 %>% filter(SEX=="FEMALE"), 
+                obese.m = adm.113 %>% filter(SEX=="MALE" & OBESITY_CLEAN==1), 
+                obese.f = adm.113 %>% filter(SEX=="FEMALE" & OBESITY_CLEAN==1), 
+                lean.m = adm.113 %>% filter(SEX=="MALE" & OBESITY_CLEAN==0), 
+                lean.f = adm.113 %>% filter(SEX=="FEMALE" & OBESITY_CLEAN==0))
+
+for(n in names(df_list)){
+  cat(paste0(n, " death rate over time\n"))
+  print(prop.table(table(df_list[[n]]$ENC_TIME_PERIOD, df_list[[n]]$INHOSP_DEATH), margin=1)[,2])
+  cat("\n")
+}
+
+```
+
+These unadjusted mortality rates highlight that in january obese women seemed to do unsuually well compared to everyone else. 
+
+```{r Treatments by sex and obesity}
+
+df_names <- c("obese.m", "obese.f", "lean.m", "lean.f")
+
+for(n in df_names){
+  cat(paste0(n, " remdesivir use over time\n"))
+  print(prop.table(table(df_list[[n]]$ENC_TIME_PERIOD, df_list[[n]]$REMDESIVIR), margin=1)[,2])
+  cat("\n")
+}
+
+for(n in df_names){
+  cat(paste0(n, " dexamethasone use over time\n"))
+  print(prop.table(table(df_list[[n]]$ENC_TIME_PERIOD, df_list[[n]]$DEXAMETHASONE), margin=1)[,2])
+  cat("\n")
+}
+
+```
+
+```{r chi-squared test for obesity and dexamethasone use among women in j13}
+for(s in c("MALE", "FEMALE")){
+  df <- adm.j13 %>% 
+    filter(SEX==s)
+  x <- as.matrix(table(df$OBESITY_CLEAN, df$DEXAMETHASONE))
+  chi <- chisq.test(x)
+  cat(s, "\n")
+  print(chi)
+}
+
+```
+
+
+It looks like obese women used more dexamethasone and remdesivir than lean women in January. This suggests to me that obese women were probably at little more sick than lean women -- yet they ended up having better outcomes. This may lend some support to the idea that obese women benefit more from these treatments...
+
+## Propensity Score Analysis
+I am intrested in estimating the treatment effect of Remdesivir/Dexamethasone and whether it interacts with either sex or obesity.
+This article has some good technical overview for propensity score matching: PMC3144483
+This article discusses a few ways to incoporate propensity score analysis and moderation/subgroup analysis: PMC4172552
+This tutorial runs through propensity score analysis in R: https://sejdemyr.github.io/r-tutorials/statistics/tutorial8.html#estimating-treatment-effects
+
+Here's my plan. I will need to do this twice: once for remdesivir and once for dexamethasone
+1) Generate a propensity score for treatment with using the whole 113 cohort
+2) Use propensity score matching to create:
+- a matched overall cohort
+- a matched male cohort
+- a matched female cohort
+3) Verify balance within the matched cohorts
+4) Estimate the treatment effect
+5) Test the interaction of treatment with obesity and sex in the overall cohort 
+6) Test the interaction of treatment with obesity in the sex-stratifeid cohorts 
+
+### Generate a propensity score
+```{r propensity score models}
+covars <- c("AGE", "SEX", "RACE_SIMPLE", "MANHATTAN", "ENC_TIME_PERIOD",
+            "OBESITY_CLEAN", "HTN", "DIABETES", "CORONARY_ARTERY_DISEASE",
+            "HEART_FAILURE", "ATRIAL_FIBRILLATION", "CHRONIC_KIDNEY_DISEASE", 
+            "COPD_ASTHMA", "CANCER_FLAG", "CHRONIC_LIVER_DISEASE", 
+            "FEBRILE", "TACHYCARDIC", "HOTN", "O2_LOW")
+
+
+
+rem_ps <- glm(formula(paste0("REMDESIVIR ~", paste0(covars, collapse="+"))), 
+              family = "binomial", data = adm.113)
+dex_ps <- glm(formula(paste0("DEXAMETHASONE ~", paste0(covars, collapse="+"))),
+              family = "binomial", data = adm.113)
+
+rem_df <- data.frame(pr_score = predict(rem_ps, type="response"),
+                     REMDESIVIR = rem_ps$model$REMDESIVIR)
+dex_df <- data.frame(pr_score = predict(dex_ps, type="response"),
+                     DEXAMETHASONE = dex_ps$model$DEXAMETHASONE)
+```
+
+Can look at the distribution of propensity scores
+```{r}
+ggplot(aes(x=pr_score), data = rem_df) + 
+  geom_histogram() + 
+  facet_wrap(~REMDESIVIR) + 
+  theme_bw()
+```
+
+```{r}
+ggplot(aes(x=pr_score), data = dex_df) + 
+  geom_histogram() + 
+  facet_wrap(~DEXAMETHASONE) + 
+  theme_bw()
+
+```
+
+### Create cohorts by propensity score matching
+The MatchIt package will actually make the propensity score in the background. The steps above to make my own propensity score were not necessary.
+```{r}
+adm.113.nomiss <- adm.113 %>% 
+  select(REMDESIVIR, DEXAMETHASONE, INHOSP_DEATH, all_of(covars)) %>% 
+  na.omit()
+m.113.nomiss <- adm.113.nomiss %>% filter(SEX=="MALE")
+f.113.nomiss <- adm.113.nomiss %>% filter(SEX=="FEMALE")
+o.113.nomiss <- adm.113.nomiss %>% filter(OBESITY_CLEAN==1)
+l.113.nomiss <- adm.113.nomiss %>% filter(OBESITY_CLEAN==0)
+
+data_list <- list(all = adm.113.nomiss,
+                  m = m.113.nomiss,
+                  f = f.113.nomiss,
+                  o = o.113.nomiss,
+                  l = l.113.nomiss)
+treatments <- c("REMDESIVIR", "DEXAMETHASONE")
+cohort <- c("all", "m", "f", "o", "l")
+match_list <- as.list(NULL)
+match_df <- as.list(NULL)
+
+for(t in treatments){
+  for(c in cohort){
+    if(c!="all"){temp_covars <- covars[covars!="SEX"]}else{temp_covars <- covars}
+    temp_name <- paste0(t, ".", c)
+    match_list[[temp_name]] <- matchit(formula(paste0(t,"~", paste0(temp_covars, collapse="+"))),
+                                       method="optimal", data=data_list[[c]])
+    match_df[[temp_name]] <- match.data(match_list[[temp_name]])
+  }
+}
+```
+I tried both nearest neighbor matching and full optimal matching.
+Although nearest neighbor does not result in balance that is AS good as full optimal matching, I think nearest neighbor might make more sense here. NN matches each treated patient with the most similar untreated patient. On the other hand, full optimal matching uses weights to make sure that all patients are used. The problem is that the whole population of COVID patients doesn't necessarily need Rem/Dex -- I found that with full matching, both rem and dex were associated with worse outcomes! Suggesting that including all the relatively healthy untreated patients (even though they were weighted down) was causing a bias. I think NN is more appropriate since it limits the cohort to patients who were similar to those who were treated. 
+Finally, I used optimal NN rather than greedy NN. Greedy NN just matches each treated patient with the best matched untreated patient available at the moment, without regard to other matches, whereas optimal matching takes into account other matches and seeks to optimize matching overall. 
+
+### Inspect the covariate balance in the matched cohorts
+
+```{r}
+match_cohort <- c("DEXAMETHASONE.all", "REMDESIVIR.all", 
+                  "DEXAMETHASONE.m", "REMDESIVIR.m",
+                  "DEXAMETHASONE.f", "REMDESIVIR.f",
+                  "DEXAMETHASONE.o", "REMDESIVIR.o",
+                  "DEXAMETHASONE.l", "REMDESIVIR.l")
+
+for(m in match_cohort){
+  m.sum <- summary(match_list[[m]])
+  fn <- paste0("out/regression/propensity_sex/LovePlot_", m, ".pdf")
+  pdf(fn, w= 6, h=6)
+  plot(m.sum)
+  dev.off()
+}
+```
+This outputs Love plots which show the Absolute Standardized Mean Difference for the cohort before and after matching. The thresholds displayed are up to 0.05 and 0.1, which are considered reasonable thresholds. 
+
+### Estimate the treatment effects
+
+```{r}
+treatments <- c("REMDESIVIR", "DEXAMETHASONE")
+cohort <- c("all", "m", "f", "o", "l")
+
+fit_list <- as.list(NULL)
+for(t in treatments){
+  for(c in cohort){
+    temp_name <- paste0(t, ".", c)
+    fit_list[[temp_name]] <- glm(formula(paste0("INHOSP_DEATH ~",t)),
+                                 family="binomial",
+                                 data=match_df[[temp_name]])
+    file_name <- paste0("out/regression/propensity_sex/Logistic_", t, "_", c, ".txt")
+    output_logistic_reg_table(model = fit_list[[temp_name]], fn = file_name)
+    
+    if(c=="all"){ ## Interaction models
+      for(i in c("SEX", "OBESITY_CLEAN")){
+        interaction_name <- paste0(t, ".", c, ".", i)
+        fit_list[[interaction_name]] <- glm(formula(paste0("INHOSP_DEATH ~ ", t, "*", i)),
+                                     family="binomial",
+                                     data=match_df[[temp_name]])
+        file_name <- paste0("out/regression/propensity_sex/Logistic_", t, "_", c, "_", i, "_int.txt")
+        output_logistic_reg_table(model = fit_list[[interaction_name]], fn = file_name)
+      }
+    }else if(c %in% c("m", "f")){
+      interaction_name <- paste0(t, ".", c, ".OBESITY_CLEAN")
+      fit_list[[interaction_name]] <- glm(formula(paste0("INHOSP_DEATH ~ OBESITY_CLEAN*",t)),
+                                   family="binomial",
+                                   data=match_df[[temp_name]])
+      file_name <- paste0("out/regression/propensity_sex/Logistic_", t, "_", c,"_OBESITY_CLEAN_int.txt")
+      output_logistic_reg_table(model = fit_list[[interaction_name]], fn = file_name)
+    }else if(c %in% c("o", "l")){
+      interaction_name <- paste0(t, ".", c, ".SEX")
+      fit_list[[interaction_name]] <- glm(formula(paste0("INHOSP_DEATH ~ SEX*",t)),
+                                   family="binomial",
+                                   data=match_df[[temp_name]])
+      file_name <- paste0("out/regression/propensity_sex/Logistic_", t, "_", c,"_SEX_int.txt")
+      output_logistic_reg_table(model = fit_list[[interaction_name]], fn = file_name)
+    }
+    
+  }
+}
+
+```
+##Conclusion
+In 0805, there was low utilization of dexamethasone. Obesity was a borderline risk factor for everyone and seemed to increase women's risk more than men's. In j13, there was relatively high utilization of dexamethasone. Dex improves outcomes. It also appears that Dex improves outcomes more for obese patients. There are more obese women than men. 
+
+There was no significant interaction between SEX-DEXAMETHASONE. But there was a significant interaction between OBESITY-DEXAMETHASONE. There was also a significant interaction between OBESITY-DEXAMETHASONE among Male patients specifically. Dexamethasone may be more effective in obese patients. 
+
+Obese men and women in j13 used more dexamethasone than lean patients. 
+
+2/25/21: Discussed with Kuan and decided that for the revision we will just say there have been changes in the treatments and demographics of the pandemic. We could consider investigating the Dex-obesity interaction in another paper
